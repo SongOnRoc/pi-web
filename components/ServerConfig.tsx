@@ -185,8 +185,12 @@ export function ServerConfig({ onClose }: Props) {
     />
   );
 
+  // `settings-general` is what gives a Settings section its scroll container and
+  // its centered readable column (app/settings.css); `settings-server` only adds
+  // this panel's own field styling on top. Without the former the panel cannot
+  // scroll and its content sits against the dialog's left edge.
   return (
-    <div className="settings-server">
+    <div className="settings-general settings-server">
       {loading && <p className="settings-server-hint">{t("settings.server.loading")}</p>}
 
       {settings && (
@@ -213,19 +217,23 @@ export function ServerConfig({ onClose }: Props) {
                 textInput("allowedHosts"),
                 t("settings.server.allowedHostsHint"),
               )}
-            </div>
-            <div className="settings-chat-options">
-              <div className="settings-chat-option settings-chat-switch-option">
+              <div className="settings-server-switch">
                 <span>{t("settings.server.openBrowser")}</span>
                 <ConfigSwitch
                   checked={draft.openBrowser}
                   disabled={loading || saving || locked.has("openBrowser")}
                   label={t("settings.server.openBrowser")}
+                  describedBy={locked.has("openBrowser") ? "settings-server-openBrowser-locked" : undefined}
                   onChange={(enabled) => update("openBrowser", enabled)}
                 />
               </div>
+              {locked.has("openBrowser") && (
+                <p id="settings-server-openBrowser-locked" className="settings-server-note">
+                  {t("settings.server.environmentLocked")}
+                </p>
+              )}
+              <p className="settings-server-hint">{t("settings.server.openBrowserHint")}</p>
             </div>
-            <p className="settings-server-hint">{t("settings.server.openBrowserHint")}</p>
           </section>
 
           <section className="settings-general-section">
@@ -256,17 +264,21 @@ export function ServerConfig({ onClose }: Props) {
                 textInput("codemodeMaxWorkers", "number", { min: 1, max: 64, step: 1 }),
                 t("settings.server.codemodeMaxWorkersHint"),
               )}
-            </div>
-            <div className="settings-chat-options">
-              <div className="settings-chat-option settings-chat-switch-option">
+              <div className="settings-server-switch">
                 <span>{t("settings.server.skipVersionCheck")}</span>
                 <ConfigSwitch
                   checked={draft.skipVersionCheck}
                   disabled={loading || saving || locked.has("skipVersionCheck")}
                   label={t("settings.server.skipVersionCheck")}
+                  describedBy={locked.has("skipVersionCheck") ? "settings-server-skip-version-locked" : undefined}
                   onChange={(enabled) => update("skipVersionCheck", enabled)}
                 />
               </div>
+              {locked.has("skipVersionCheck") && (
+                <p id="settings-server-skip-version-locked" className="settings-server-note">
+                  {t("settings.server.environmentLocked")}
+                </p>
+              )}
             </div>
           </section>
 
