@@ -2073,6 +2073,100 @@
   font-size: 12px;
 }
 
+/* Settings › Server: a stack of labeled fields, each with its own note, since
+   every one of them needs a sentence about what it does. */
+.settings-server-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.settings-server-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-server-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.settings-server-input {
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.settings-server-input:focus-visible {
+  border-color: var(--accent);
+}
+
+/* A phone gets 16px form text so focusing a field does not zoom the page. */
+@media (max-width: 640px) {
+  .settings-server-input {
+    height: 38px;
+    font-size: 16px;
+  }
+}
+
+.settings-server-hint,
+.settings-server-note {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-server-note {
+  color: var(--text-muted);
+}
+
+.settings-server-hint code {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+.settings-server-current {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings-server-current code {
+  color: var(--text);
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+.settings-server-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 26px;
+}
+
+.settings-server-saved {
+  color: var(--accent);
+  font-size: 11px;
+}
+
 .settings-general-error {
   margin: 8px 0 0;
   color: #ef4444;

@@ -2,8 +2,10 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { parseArgs } = require("util");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const launchSettings = require("./launch-settings");
 
-const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
+const { defaultLaunchSettings, launchEnvironment, readEnvironmentSettings, resolveLaunchSettings } = launchSettings;
 
 const CLI_OPTIONS = {
   port: { type: "string", short: "p" },
@@ -11,10 +13,6 @@ const CLI_OPTIONS = {
   "no-open": { type: "boolean" },
   help: { type: "boolean", short: "h" },
 };
-
-function isEnabled(value) {
-  return typeof value === "string" && TRUE_VALUES.has(value.trim().toLowerCase());
-}
 
 function normalizePort(value) {
   if (typeof value !== "string" || !/^\d+$/.test(value)) {
@@ -57,6 +55,11 @@ Options:
       --no-open              Do not open a browser automatically
   -h, --help                 Show this help message and exit
 
+Settings › Server in the web UI writes <agent-dir>/pi-web-launch.json, which
+holds the port, bind hostname, browser opening and the variables below that have
+a setting. A command-line option overrides it, and so does an environment
+variable that is set; 'pi-web status' lists the servers that are running.
+
 Environment:
   PORT                       Default port when --port is omitted
   PI_WEB_HOSTNAME            Default hostname when --hostname is omitted
@@ -79,11 +82,14 @@ function toParseError(error) {
 
 // Returns { command: "start", ...launch options } for a bare launch, or
 // { command, help, port?, check? } for a subcommand.
-function parseCommandLine(args = process.argv.slice(2), env = process.env) {
+//
+// `storedSettings` is passed to the launch options of a bare launch; the
+// subcommands do not start anything and so do not read the settings file.
+function parseCommandLine(args = process.argv.slice(2), env = process.env, storedSettings) {
   const first = args[0];
   const command = first === "-v" || first === "--version" ? "version" : first;
   if (!Object.hasOwn(COMMAND_OPTIONS, command)) {
-    return { command: "start", ...parseLaunchOptions(args, env) };
+    return { command: "start", ...parseLaunchOptions(args, env, storedSettings) };
   }
 
   let values;
@@ -106,7 +112,26 @@ function parseCommandLine(args = process.argv.slice(2), env = process.env) {
   };
 }
 
-function parseLaunchOptions(args = process.argv.slice(2), env = process.env) {
+/**
+ * The settings the launcher starts with. Command-line options win over
+ * everything else; below them `resolveLaunchSettings` applies the variables the
+ * operator set, then the file Settings › Server writes, then the defaults.
+ *
+ * The environment is not read again here: `resolveLaunchSettings` already did,
+ * and only for the variables the launcher recorded (`PI_WEB_LAUNCH_FIXED_VARS`).
+ * Reading `env.PORT` directly would let a shell's or a dev server's PORT
+ * override the saved port without the operator meaning it to.
+ *
+ * @param {string[]} [args]
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {Record<string, unknown>} [storedSettings] a partial set of overrides; omitted means read the file
+ */
+function parseLaunchOptions(args = process.argv.slice(2), env = process.env, storedSettings) {
+  // An injected set of settings stands in for the file, but the variables the
+  // operator set still apply over it, as they do over a real file.
+  const stored = storedSettings === undefined
+    ? resolveLaunchSettings({ env })
+    : { ...defaultLaunchSettings(), ...storedSettings, ...readEnvironmentSettings(launchEnvironment(env)) };
   let values;
   let positionals;
   try {
@@ -132,9 +157,10 @@ function parseLaunchOptions(args = process.argv.slice(2), env = process.env) {
 
   return {
     help: false,
-    port: normalizePort(values.port ?? env.PORT ?? "30141"),
-    hostname: values.hostname ?? env.PI_WEB_HOSTNAME ?? "127.0.0.1",
-    openBrowser: !values["no-open"] && !isEnabled(env.PI_WEB_NO_OPEN),
+    port: normalizePort(values.port === undefined ? String(stored.port) : values.port),
+    hostname: values.hostname === undefined ? String(stored.hostname) : values.hostname,
+    // `--no-open` still turns the browser off for one run, whatever the file says.
+    openBrowser: !values["no-open"] && stored.openBrowser !== false,
   };
 }
 

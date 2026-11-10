@@ -49,6 +49,44 @@ export interface ToolSettingsResponse {
   codemodeInlineBudget: CodemodeInlineBudgetSetting;
 }
 
+/** One launch setting Settings › Server offers, as `bin/launch-settings.js` names it. */
+export type LaunchSettingKey =
+  | "port"
+  | "hostname"
+  | "openBrowser"
+  | "allowedHosts"
+  | "appName"
+  | "idleTimeoutMs"
+  | "shutdownDeadlineMs"
+  | "codemodeMaxWorkers"
+  | "skipVersionCheck";
+
+/** The launch settings in effect, after defaults, the stored file and the environment. */
+export interface LaunchSettingsValues {
+  port: string;
+  hostname: string;
+  openBrowser: boolean;
+  allowedHosts: string[];
+  appName: string;
+  idleTimeoutMs: number;
+  shutdownDeadlineMs: number;
+  codemodeMaxWorkers: number;
+  skipVersionCheck: boolean;
+}
+
+export interface LaunchSettingsResponse {
+  /** What the next launch would use, with the environment's variables applied. */
+  values: LaunchSettingsValues;
+  /** What the file itself holds: only settings deliberately changed from the default. */
+  stored: Partial<LaunchSettingsValues>;
+  /** Settings an environment variable fixes for this process, so saving them changes nothing. */
+  environmentKeys: string[];
+  /** The file the settings are saved in. */
+  path: string;
+  /** The address a browser on this machine opens, or null for port 0. */
+  url: string | null;
+}
+
 export interface SkillSearchResult {
   package: string;
   installs: string;
