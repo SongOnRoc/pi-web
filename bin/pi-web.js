@@ -18,6 +18,10 @@ const fs = require("fs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getHelpText, parseCommandLine } = require("./pi-web-options");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const launchSettingsModule = require("./launch-settings");
+
+const { LOOPBACK_HOSTNAMES, OPERATOR_LAUNCH_ENV_VARS, readLaunchSettingsFile } = launchSettingsModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getNextNodeArgs } = require("./pi-web-node-args");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { wireChildProcessLifecycle } = require("./process-lifecycle");
@@ -75,6 +79,37 @@ function startServer({ port, hostname, openBrowser }) {
   const pkgDir = path.join(__dirname, "..");
   const nextDir = path.join(pkgDir, ".next");
 
+  // The launch settings, put into the server's environment before Next.js
+  // starts: a variable already set was chosen by whoever started this process,
+  // so it wins over the file, and the file wins over the defaults.
+  const launchSettings = readLaunchSettingsFile();
+
+  // What the operator set before this launcher added anything of its own: only
+  // these are "fixed by the environment", which Settings › Server shows as
+  // read-only. The launcher always sets PI_WEB_HOSTNAME for Next, and pi-web
+  // itself defaults PI_CODEMODE_MAX_WORKERS, so those cannot count.
+  const fixedByEnvironment = OPERATOR_LAUNCH_ENV_VARS.filter((name) => process.env[name] !== undefined);
+  process.env.PI_WEB_LAUNCH_FIXED_VARS = fixedByEnvironment.join(",");
+  if (launchSettings.openBrowser === false) process.env.PI_WEB_NO_OPEN = "1";
+  if (launchSettings.allowedHosts?.length && process.env.PI_WEB_ALLOWED_HOSTS === undefined) {
+    process.env.PI_WEB_ALLOWED_HOSTS = launchSettings.allowedHosts.join(",");
+  }
+  if (launchSettings.appName && process.env.PI_WEB_APP_NAME === undefined) {
+    process.env.PI_WEB_APP_NAME = launchSettings.appName;
+  }
+  if (launchSettings.idleTimeoutMs !== undefined && process.env.PI_WEB_IDLE_TIMEOUT_MS === undefined) {
+    process.env.PI_WEB_IDLE_TIMEOUT_MS = String(launchSettings.idleTimeoutMs);
+  }
+  if (launchSettings.shutdownDeadlineMs !== undefined && process.env.PI_WEB_SHUTDOWN_DEADLINE_MS === undefined) {
+    process.env.PI_WEB_SHUTDOWN_DEADLINE_MS = String(launchSettings.shutdownDeadlineMs);
+  }
+  if (launchSettings.codemodeMaxWorkers !== undefined && process.env.PI_CODEMODE_MAX_WORKERS === undefined) {
+    process.env.PI_CODEMODE_MAX_WORKERS = String(launchSettings.codemodeMaxWorkers);
+  }
+  if (launchSettings.skipVersionCheck && process.env.PI_WEB_SKIP_VERSION_CHECK === undefined) {
+    process.env.PI_WEB_SKIP_VERSION_CHECK = "1";
+  }
+
   // Resolve next's CLI entry directly to avoid relying on .bin symlinks (which
   // may not exist when installed via npx).
   let nextBin;
@@ -90,7 +125,7 @@ function startServer({ port, hostname, openBrowser }) {
     }
   }
 
-  const loopbackHostnames = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+  const loopbackHostnames = LOOPBACK_HOSTNAMES;
   const passwordEnabled = Boolean(process.env.PI_WEB_PASSWORD);
 
   if (!fs.existsSync(nextDir)) {
