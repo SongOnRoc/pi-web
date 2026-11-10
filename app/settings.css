@@ -2080,7 +2080,23 @@
   flex-direction: column;
   gap: 14px;
   width: 100%;
-  max-width: 420px;
+  max-width: 600px;
+}
+
+/* A switch row sits in the field stack: its label on the left edge of the
+   inputs, its switch on the right, so it reads as one more field. */
+.settings-server-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 34px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.settings-server-switch > span {
+  min-width: 0;
 }
 
 .settings-server-field {
