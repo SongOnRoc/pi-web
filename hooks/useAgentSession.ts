@@ -28,6 +28,8 @@ import {
 import { clearDraft, getDraft, holdStoredDraft, parkedNewSessionDraftKey, rekeyDraft, restoreDraftSubmission, setDraft, type ChatDraft } from "@/lib/draft-store";
 import { getPreferredToolPreset, setPreferredToolPreset } from "@/lib/tool-preset-preference";
 import { CONFIGURED_TOOL_PRESET, getPresetFromToolNames, getToolNamesForPreset, type ToolEntry, type ToolPreset } from "@/lib/tool-presets";
+import type { AskQuestionReply } from "@/lib/ask-question";
+import type { OpenAskQuestion } from "@/lib/ask-question-runtime";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import { mergeSessionStats, type SessionFileStats } from "@/lib/session-stats";
 import { formatSessionSummary } from "@/lib/session-stats-format";
@@ -543,6 +545,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [sessionStatsOverride, setSessionStatsOverride] = useState<SessionStatsInfo | null>(null);
   const [extensionDialogs, setExtensionDialogs] = useState<ExtensionUiDialogRequest[]>([]);
   const [extensionCustomUis, setExtensionCustomUis] = useState<ExtensionUiCustomRequest[]>([]);
+  // A question this session may still answer. Held apart from the extension panels
+  // because it is not a panel: the card is drawn at the composer from these.
+  const [openQuestions, setOpenQuestions] = useState<OpenAskQuestion[]>([]);
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
@@ -1490,6 +1495,25 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       },
     });
   }, []);
+
+  /** Send the card's answer for a call, and drop the card once it is taken. */
+  const answerQuestion = useCallback(async (toolCallId: string, reply: AskQuestionReply) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    // Closing first makes a second click on a slow request harmless: the card is
+    // gone, so there is nothing left to click.
+    setOpenQuestions((previous) => previous.filter((item) => item.toolCallId !== toolCallId));
+    try {
+      await sendAgentCommand(sid, { type: "answer_question", toolCallId, reply });
+    } catch (e) {
+      // A question that already timed out answers "no longer open"; that needs no notice.
+      const message = e instanceof Error ? e.message : String(e);
+      if (!message.includes("no longer open")) {
+        addNotice({ id: `ask-question-${toolCallId}`, message, type: "error" });
+      }
+    }
+  }, [addNotice]);
+
   const translateRef = useRef(opts.t);
   translateRef.current = opts.t;
   const translate = useCallback((key: string, params?: TranslationParams) => translateRef.current(key, params), []);
@@ -2244,6 +2268,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           steering: [...((event.steering as string[] | undefined) ?? [])],
           followUp: [...((event.followUp as string[] | undefined) ?? [])],
         });
+        break;
+      case "ask_question_request": {
+        const question: OpenAskQuestion = {
+          toolCallId: event.toolCallId as string,
+          request: event.request as OpenAskQuestion["request"],
+          askedAt: Date.now(),
+        };
+        setOpenQuestions((previous) => [...previous.filter((item) => item.toolCallId !== question.toolCallId), question]);
+        break;
+      }
+      case "ask_question_close":
+        setOpenQuestions((previous) => previous.filter((item) => item.toolCallId !== event.toolCallId));
         break;
       case "auto_retry_start":
         setRetryInfo({ attempt: event.attempt as number, maxAttempts: event.maxAttempts as number, errorMessage: event.errorMessage as string | undefined });
@@ -3688,7 +3724,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, sessionStats, autoCompactionEnabled,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices: noticeState.visible, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    notices: noticeState.visible, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, openQuestions, answerQuestion,
     isAutoModelSelection: isNew && newSessionModel === null,
     isAutoThinkingSelection: isNew && newSessionThinkingLevel === null,
     defaultModel: newSessionDefaultModel,

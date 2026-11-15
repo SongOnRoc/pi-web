@@ -126,6 +126,29 @@ npm run lint
 
 第 1–2 步单独可提，不影响现有功能。
 
+## 实施结果
+
+已实现并验证。与本文最初设想的一处出入，详见 ADR 0008 的「Decision」第 1 条：
+工具本身改由 pi-web 提供（`lib/ask-question-extension.ts`），不再靠扩展渲染面板、
+也不再用哨兵粘贴回传答案，而是走服务端持有的结构化问答。
+
+新增：
+- `lib/ask-question.ts`（纯逻辑）· `lib/ask-question-extension.ts`（工具）
+- `lib/ask-question-runtime.ts`（待回答调用 + 事件/命令）
+- `components/AskQuestionPanel.tsx`（卡片）
+
+改动：`lib/rpc-manager.ts`、`hooks/useAgentSession.ts`、`components/ChatWindow.tsx`、
+i18n 三语。
+
+测试：
+- 45 个新单测（`lib/ask-question.test.mjs` 20、`lib/ask-question-runtime.test.mjs` 10、
+  `components/AskQuestionPanel.test.mjs` 15）全过
+- 全量 `npm test` 零新增失败（对照 `origin/main` 基线）
+- `tsc --noEmit`、`eslint` 干净
+- 端到端（`e2e/ask-question.mjs`）：真实模型提问 → 页面作答 → 工具返回 `env: Production`
+- 浏览器（`e2e/ask-question-browser.mjs`）：桌面点击 + 手机触摸，均完成作答并关闭；
+  手机 390px 无横向溢出（`scrollWidth === clientWidth`）
+
 ## 参考
 
 - ADR：`docs/adr/0008-native-view-for-extension-questions.md`

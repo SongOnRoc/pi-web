@@ -15,6 +15,7 @@ import { formatTurnDuration, getTurnDurationMs } from "@/lib/turn-duration";
 import { dropMentionText, splitDroppedItems, uploadFiles, type DroppedItem } from "@/lib/file-upload-client";
 import { MessageView } from "./MessageView";
 import { MarkdownBody } from "./MarkdownBody";
+import { AskQuestionPanel } from "./AskQuestionPanel";
 import { ChatInput, getUserMessageDraftImages, getUserMessageText, type ChatInputHandle } from "./ChatInput";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
@@ -297,7 +298,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, modelSwitching, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, setNoticePaused, addNotice,
+    notices, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, openQuestions, answerQuestion, setNoticePaused, addNotice,
     isAutoModelSelection,
     isAutoThinkingSelection,
     defaultModel,
@@ -919,6 +920,24 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     />
   );
 
+  // The question card sits where the composer is, not in the modal layer, and
+  // copies the composer's two width constraints (`ChatInput`'s fieldset padding
+  // and inner column) so its edges line up with the input below it.
+  const askQuestionCard = openQuestions.length > 0
+    ? (
+      <div style={{ padding: "0 16px 8px", paddingRight: isMobile ? 16 : 52, flexShrink: 0 }}>
+        <div style={{ width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
+          <AskQuestionPanel
+            key={openQuestions[0]!.toolCallId}
+            requestKey={openQuestions[0]!.toolCallId}
+            questions={openQuestions[0]!.request.questions}
+            onSubmit={(reply) => void answerQuestion(openQuestions[0]!.toolCallId, reply)}
+          />
+        </div>
+      </div>
+    )
+    : null;
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-text-muted">
@@ -1377,6 +1396,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
             </div>
           </div>
         )}
+        {askQuestionCard}
         {chatInputElement}
         <ExtensionStatusBar
           statuses={extensionStatuses}
