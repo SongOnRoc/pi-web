@@ -43,6 +43,8 @@ import {
   createSubagentExtension,
   preferPiWebSubagentExtension,
 } from "./subagent-extension";
+import { askQuestionRuntimeFor, createAskQuestionExtension, forgetAskQuestionRuntime, registerAskQuestionRuntime } from "./ask-question-extension";
+import { AskQuestionRuntime } from "./ask-question-runtime";
 import {
   listSubagentProfiles,
   hasSubagentResourceSnapshot,
@@ -374,6 +376,14 @@ export class AgentSessionWrapper {
   private pendingUiResponses = new Map<string, PendingUiResponse>();
   private pendingUiRequests = new Map<string, AgentEvent>();
   private activeCustomUis = new Map<string, ActiveCustomUi>();
+  // Questions this session may still answer, and the cards waiting on them. Held
+  // here rather than in the extension so a Stop can settle every one of them.
+  private readonly askQuestions = new AskQuestionRuntime({ emit: (event) => this.emit(event as unknown as AgentEvent) });
+
+  /** The questions this session may still answer, for the tool that asks them. */
+  askQuestionRuntime(): AskQuestionRuntime {
+    return this.askQuestions;
+  }
   private extensionUiAbortController = new AbortController();
   private extensionStatuses = new Map<string, string>();
   private extensionWidgets = new Map<string, ExtensionWidgetItem>();
@@ -1525,6 +1535,8 @@ export class AgentSessionWrapper {
         this.resetIdleTimer();
         // Stop must unwind extension commands that have not started the agent yet.
         this.extensionUiAbortController.abort(new DOMException("Extension UI cancelled by Stop", "AbortError"));
+        // A card waiting for an answer is the same: Stop means nobody is answering.
+        this.askQuestions.cancelAll();
         // A prompt still waiting for MCP servers is withdrawn before it starts a run.
         if (this.mcpPromptWait) {
           const wait = this.mcpPromptWait;
@@ -1923,6 +1935,20 @@ export class AgentSessionWrapper {
       case "extension_ui_input": {
         this.handleExtensionUiInput(command.id as string, command.data as string);
         return null;
+      }
+
+      case "answer_question": {
+        // The card's answer, by tool call id. A stale card (the call timed out, or
+        // a Stop settled it) learns the question is gone instead of failing the run.
+        const runtime = askQuestionRuntimeFor(this.sessionId);
+        if (!runtime) throw new Error("This question is no longer open.");
+        const result = runtime.answer(command.toolCallId as string, command.reply);
+        if (!result.ok) throw new Error(result.error);
+        return { success: true };
+      }
+
+      case "open_questions": {
+        return { questions: askQuestionRuntimeFor(this.sessionId)?.open() ?? [] };
       }
 
       case "set_auto_retry": {
@@ -2896,9 +2922,12 @@ function registerRpcWrapper(wrapper: AgentSessionWrapper): void {
   if (wrapper.sessionFile) cacheSessionPath(sessionId, wrapper.sessionFile);
   // A closing wrapper reports itself dead while extensions shut down, so the
   // next request registers a replacement under the same id. Finishing later,
-  // the closing wrapper must not unregister that replacement.
+  // the closing wrapper must not unregister that replacement. `onDestroy` holds
+  // one callback, so the question runtime is dropped from the same place rather
+  // than from an `onDestroy` of its own, which would replace this one.
   wrapper.onDestroy(() => {
     if (registry.get(sessionId) === wrapper) registry.delete(sessionId);
+    forgetAskQuestionRuntime(sessionId);
   });
   // A wrapper registered before a hot reload still unregisters by id alone.
   const previous = registry.get(sessionId);
@@ -2907,6 +2936,8 @@ function registerRpcWrapper(wrapper: AgentSessionWrapper): void {
   }
   recordSessionStart(sessionId);
   registry.set(sessionId, wrapper);
+  // The tool asks through the wrapper that owns the page, so bind it by session id.
+  registerAskQuestionRuntime(sessionId, wrapper.askQuestionRuntime());
   wrapper.start();
   if (!wrapper.isChatOnly()) wrapper.beginExtensionBinding();
 }
@@ -3625,6 +3656,7 @@ export async function startRpcSession(
                 () => listSubagentProfiles(sessionCwd),
                 isBuiltInSubagentsEnabled,
               ),
+              createAskQuestionExtension(),
             ],
             extensionsOverride: (base) => preferUserPowerShellExtension(
               preferUserBashExtension(preferPiWebSubagentExtension(base)),

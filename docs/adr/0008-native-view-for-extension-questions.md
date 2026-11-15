@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed.
+Accepted. Implemented; the decision below changed while building it, as noted
+under "Decision" item 1.
 
 ## Context
 
@@ -52,64 +53,73 @@ problems in the web client and never to add pi-web-only options or fields to
 
 ## Decision
 
-1. **The client finds the call, and the request carries no identity.** A `custom`
-   request's `id` is a `randomUUID()` this client generates
-   (`lib/rpc-manager.ts:2450`), so it cannot name the tool call that asked. The view
-   is drawn when a `custom` request is open *and* exactly one `ask_user_question`
-   call has no result yet. `executionMode: "sequential"` does not by itself
-   guarantee that: it serialises execution, but the whole assistant message is
-   committed before any of its calls runs (`hooks/useAgentSession.ts:2112`), so two
-   calls in one message are both unresolved while the first is running. So the count
-   is checked, not assumed, and anything other than one falls back to the text
-   panel, which is always correct. Every other extension keeps the text panel too.
+1. **Pi Web owns the tool, so no extension has to render itself.** The first draft
+   had the client find an extension's `ask_user_question` call by tool name and
+   answer it with a bracketed paste the extension's panel parsed. That worked but
+   was two conventions pretending to be one: a `custom` request carries no tool
+   call id (its `id` is a `randomUUID()` this client makes, `lib/rpc-manager.ts`),
+   and replaying a batch through keystrokes is fragile, since a digit is an option
+   choice rather than text (`panel.ts:319`).
 
-2. **`components/AskQuestionPanel.tsx` draws it, at the composer.** A card with the
-   question, one row per option, a recommended badge, a free-text answer row, and
-   Skip / Submit, laid out above `{chatInputElement}` (`ChatWindow.tsx:1548`) rather
-   than in the modal layer. The transcript stays visible; the composer stays where it
-   is; a phone keeps its viewport.
+   Since pi-web already builds its own inline extensions and tools
+   (`createSubagentExtension()`, `lib/subagent-extension.ts`), the tool moved
+   here: `lib/ask-question-extension.ts` registers `ask_user_question` with
+   `exposure: "model-only"`, and the questions travel as structured data. A tool
+   an extension registers is still shown by whichever UI that extension asks for;
+   this one never has to ask.
 
-3. **The rows are real controls.** Pointer, touch and keyboard all work, because
-   these are buttons and inputs, not glyphs. The digits, Enter, Space, Tab, arrows,
-   Ctrl+S and Esc the text panel documents keep working, so a keyboard user loses
-   nothing.
+2. **The server holds the open question, the page draws it.**
+   `AskQuestionRuntime` (`lib/ask-question-runtime.ts`) keeps each pending call by
+   tool call id and emits `ask_question_request`; the answer comes back as an
+   `answer_question` command, validated against the request it settles
+   (`parseReply()`). Stop settles every open call as cancelled, so a stopped run
+   never waits on a card nobody can see. Neither the event nor the command is part
+   of `extension_ui_request`: they are this client's own wire, as `editor_paste`
+   and `bash_output` already are.
 
-4. **An answer is one bracketed paste, not a simulated keyboard walk.** The panel
-   accepts a single `\x1b[200~` … `\x1b[201~` paste whose body is
-   `pi-ask-question:1:<json>`, and settles every question from it. Replaying arrow
-   keys and digits was the obvious alternative and is wrong twice over: a digit is an
-   option choice rather than text in an options question (`panel.ts:319`), and the
-   answer row appends, so a value would need clearing first. A paste already lands
-   whole in the plugin (`handlePaste()`), and a sentinel makes a reserved case of a
-   path that exists. The panel keeps its keyboard behaviour untouched for terminals.
+3. **`components/AskQuestionPanel.tsx` draws it, at the composer.** A card with
+   the question, one row per option, a recommended badge, a free-text answer row,
+   and Skip / Submit, laid out above `{chatInputElement}` (`ChatWindow.tsx:1548`)
+   rather than in the modal layer. Its width copies the composer's two constraints
+   (`ChatInput`'s fieldset padding and inner column), so the edges line up; measured
+   at 1280px both are 820px wide and the card's bottom sits above the composer's
+   top.
 
-5. **`lib/ask-question-view.ts` holds the pure part.** Finding the pending call,
-   parsing `questions[]`, and encoding a paste body are functions, not rendering, and
-   are tested without a browser. `MessageView.tsx` gains no branch.
+4. **The rows are real controls.** Pointer, touch and keyboard all work, because
+   these are buttons and inputs, not glyphs: an option is a `button` with
+   `role="radio"`/`role="checkbox"` and `aria-checked`, the answer is an `input`, and
+   Skip/Submit are buttons. The digits, Enter, Space, Tab, arrows, Ctrl+S and Esc a
+   keyboard user expects keep working.
 
-6. **The text panel stays.** pi's TUI, `--mode rpc` hosts that implement no
-   `custom()`, and any client without this view keep using it. It is the fallback,
-   not dead code.
+5. **`lib/ask-question.ts` holds the pure part.** Parsing `questions[]`, drafting
+   answers, and validating a reply are functions, tested without a browser; the
+   card, the tool and the tests all read the same module, so the answers the panel
+   sends and the answers the tool accepts cannot drift apart.
+
+6. **The text panel is untouched, for extensions that do ask for one.** pi's TUI,
+   `--mode rpc` hosts that implement no `custom()`, and any other client keep
+   working exactly as before.
 
 ## Consequences
 
-- Two ways to draw one thing. The text path is what every non-web host runs, and the
-  plugin's own tests cover both, so neither can rot unnoticed.
+- `ask_user_question` exists only in Pi Web: the `pi` CLI has no such tool unless an
+  extension provides one, and then that extension's own panel is what a TUI shows.
+  In Pi Web the tool is always there, as the subagent tools are.
 - The card is a fork of client code. An upgrade of pi-web needs this merged again:
-  two files touched, two added.
+  five files touched, five added.
 - A phone gets a usable card. The text panel measured 837px of content in a 348px
   box before the plugin narrowed itself to 44 columns and gave up glyphs wider than
   one cell (`─`, `●`, `☑`, `✎`); the card has no such arithmetic, and its options are
   tappable.
-- The sentinel is a private convention between this client and this plugin. It costs
-  nothing if they drift: an unknown paste is text in the answer row, as today.
+- The event and command are this client's own. They are additive: a client that
+  knows neither still gets a correct, if plainer, experience from the text panel.
 - i18n: new user-facing strings are added in `en`, `zh-CN` and `zh-TW`
   (`docs/i18n.md`).
 
 ## Follow-ups
 
-- Let a second extension adopt the same card. That needs an identity on the request,
-  which `extension_ui_request` does not have today; until pi's API offers one, the
-  pending-call search stays single-tool.
-- `tool_ask_user` in the SDK does the same job. If pi ever routes questions through a
-  request of its own, the card should hang off that instead of a tool name.
+- An extension that wants the same card cannot get it: `extension_ui_request` carries
+  no identity to match a pending call against. That is pi's API to extend.
+- `dsh-user-questions` also models `detail`, `intent` (`plan-review`, `approval`) and
+  a timed wait that outlives the card. None is implemented here; the shapes here
+  track only the generic batch, which is what the tool asks.
