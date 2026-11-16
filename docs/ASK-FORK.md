@@ -54,13 +54,47 @@ The `ask-` prefix matters: upstream tags are `v0.17.0`, and
 `publish.yml` (upstream's, left untouched) checks that a `v*` tag matches
 `package.json`'s version. An `ask-v*` tag never reaches that workflow.
 
-## Taking upstream changes
+## Two kinds of update
+
+### Iterating on the card (you changed something)
+
+```sh
+./scripts/ask-install.sh
+```
+
+It rebuilds only when a file that reaches the build is newer than
+`.next/BUILD_ID`, runs the card's tests, packs, and installs globally. With no
+source change it skips the 3.5-minute build and just repacks (5 seconds).
+
+The loop is: edit → `./scripts/ask-install.sh` → restart `pi-web`. Use
+`npm run dev` instead while actually developing: it reloads on save and needs no
+build at all, and the card's own page is at `http://127.0.0.1:30141`.
+
+`--force` rebuilds regardless; `--no-build` installs the existing `.next`.
+
+### Taking an upstream release
+
+Nothing to build by hand: push the rebased branch and CI produces the package.
 
 ```sh
 git fetch upstream
-git checkout main-with-ask
 git rebase upstream/main
+node --experimental-strip-types --test lib/ask-question.test.mjs \
+  lib/ask-question-runtime.test.mjs components/AskQuestionPanel.test.mjs \
+  lib/i18n/registry.test.mjs
+npx tsc --noEmit
+git push --force-with-lease origin main-with-ask   # CI builds an artifact
+git tag -a ask-v0.18.0-1 -m "card, on upstream 0.18.0"
+git push origin ask-v0.18.0-1                      # CI writes the Release
 ```
+
+Then install that Release's `.tgz` (below). The distinction that matters: a
+branch push gives an artifact that expires in 90 days; a tag gives a Release that
+stays, and a URL that does not move.
+
+## Maintaining the rebase
+
+### Rebasing, not merging
 
 Rebase, not merge: the fork stays 2 commits, so the history stays readable and a
 pull request to upstream would be exactly those 2 commits.
@@ -97,6 +131,20 @@ npx tsc --noEmit
 A rebase that compiles and passes those has not broken the card. A rebase that
 silently changed the tool's behaviour — pi changing `registerTool`, say — is what
 these catch, and it is why they run in CI before a package is built.
+
+## Upgrading an installed copy
+
+`npm install -g` over an existing install replaces it — no uninstall, no stale
+files. So an upgrade is the same command with a different tag:
+
+```sh
+npm install -g https://github.com/SongOnRoc/pi-web/releases/download/ask-v0.18.0-1/pi-web-ask-<sha>.tgz
+```
+
+`npm update` does not touch a globally installed tarball; reinstall to upgrade.
+
+Rolling back is the same command with the previous tag. Old `.tgz` files stay on
+the Releases page.
 
 ## Undoing a bad build
 
