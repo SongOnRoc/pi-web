@@ -45,3 +45,6 @@ yarn-error.log*
 next-env.d.ts
 .factory
 e2e_*.mjs
+
+# Packages built by the ask-fork workflow; a Release holds the ones worth keeping.
+*.tgz

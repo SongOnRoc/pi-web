@@ -1,0 +1,137 @@
+# Builds a runnable package of this fork and attaches it to a Release.
+#
+# This fork exists for one feature (the native ask_user_question card). It is not
+# published to npm: `package.json` names `@agegr/pi-web`, whose npm Trusted
+# Publisher belongs to `agegr/pi-web`, so publishing from `SongOnRoc/pi-web`
+# would be refused. A `.tgz` installs the same way and needs no registry.
+#
+# Two triggers, for two different needs:
+#
+#   push to main-with-ask  a build of every commit, kept as a workflow artifact
+#                          for 90 days. Enough to install and try a change.
+#   tag ask-v*             a build kept forever on the GitHub Release, which is
+#                          where a version you rely on should live.
+#
+# `npm run build` is not optional: `package.json`'s `files` lists `.next`, and
+# `bin/pi-web.js` exits with "Build artifacts not found" without it.
+
+name: ask-fork
+
+on:
+  push:
+    branches: [main-with-ask]
+    tags: ["ask-v*"]
+  # A rebuild can be started by hand from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # One build per ref: a newer push supersedes the artifact of an older one.
+  group: ask-fork-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The same Node the upstream CI uses, so a build here matches one there.
+          node-version: 22.19.0
+          cache: npm
+
+      - run: npm ci
+
+      # The card's own tests, and the type check that catches an upstream rename
+      # before a broken package is published.
+      - name: Test the question card
+        run: |
+          node --experimental-strip-types --test \
+            lib/ask-question.test.mjs \
+            lib/ask-question-runtime.test.mjs \
+            components/AskQuestionPanel.test.mjs \
+            lib/i18n/registry.test.mjs
+      - run: npx tsc --noEmit
+
+      - run: npm run build
+
+      # `npm pack` writes `@agegr/pi-web-<version>.tgz`; the scope's slash becomes
+      # a dash. Renamed to carry the commit, so two builds of one version are not
+      # mistaken for each other.
+      - name: Pack
+        id: pack
+        run: |
+          npm pack
+          packed=$(ls ./*.tgz | head -1)
+          short=$(git rev-parse --short HEAD)
+          name="pi-web-ask-${short}.tgz"
+          mv "$packed" "$name"
+          # A phone or a browser cannot run a build; this is what the release notes show.
+          size=$(du -h "$name" | cut -f1)
+          echo "file=$name" >> "$GITHUB_OUTPUT"
+          echo "size=$size" >> "$GITHUB_OUTPUT"
+
+      # The package has to install and start, or the artifact is worthless. This is
+      # the check that a plain unit-test run cannot make.
+      - name: Install and start the packed package
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          cd "$work"
+          npm init -y >/dev/null
+          # A user prefix keeps this away from the runner's global directories.
+          npm config set prefix "$work/prefix"
+          # node-pty and @agegr/pi-web run install scripts; npm 11 refuses them by default.
+          npm install -g "$GITHUB_WORKSPACE/${{ steps.pack.outputs.file }}" \
+            --allow-scripts=@agegr/pi-web,node-pty,@google/genai,protobufjs
+          # npm puts the launcher in `<prefix>/bin` on Linux and macOS, and directly in
+          # `<prefix>` on Windows. Cover both rather than assume.
+          export PATH="$work/prefix/bin:$work/prefix:$PATH"
+          pi-web -p 31999 -H 127.0.0.1 --no-open > server.log 2>&1 &
+          pid=$!
+          for _ in $(seq 1 60); do
+            if curl -sf -o /dev/null http://127.0.0.1:31999/; then break; fi
+            sleep 1
+          done
+          status=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:31999/ || true)
+          kill "$pid" 2>/dev/null || true
+          if [ "$status" != "200" ]; then
+            echo "::error::the packed package did not serve (http $status)"
+            cat server.log
+            exit 1
+          fi
+          echo "packed package served http 200"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pi-web-ask-${{ github.sha }}
+          path: ${{ steps.pack.outputs.file }}
+          retention-days: 90
+
+      # A tag is the only thing that writes a Release: a branch push leaves an
+      # artifact, so a Release list stays a list of versions worth keeping.
+      - name: Publish the Release
+        if: startsWith(github.ref, 'refs/tags/ask-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.pack.outputs.file }}
+          name: ${{ github.ref_name }}
+          body: |
+            Runnable package of `main-with-ask` at ${{ github.sha }}.
+
+            Built from `${{ github.ref_name }}`; upstream base is in the Notes below.
+
+            ```sh
+            npm install -g ./${{ steps.pack.outputs.file }}
+            # npm 11+ needs the install scripts allowed:
+            #   --allow-scripts=@agegr/pi-web,node-pty,@google/genai,protobufjs
+            pi-web
+            ```
+
+            Size: ${{ steps.pack.outputs.size }}. This fork adds the native
+            `ask_user_question` card; see `docs/requirements/ask-user-question-card.md`.
