@@ -25,14 +25,14 @@ rebase onto. The work is `main-with-ask`.
 
 Every push to `main-with-ask` runs
 [`ask-fork.yml`](../.github/workflows/ask-fork.yml) and uploads
-`pi-web-ask-<sha>.tgz` as a workflow artifact (kept 90 days). A tag `ask-v*`
+`pi-web-ask.tgz` as a workflow artifact (kept 90 days). A tag `ask-v*`
 attaches the same file to a GitHub Release, which is permanent.
 
 ```sh
 # Newest build for a branch: Actions → ask-fork → the run → Artifacts
-npm install -g ./pi-web-ask-<sha>.tgz
+npm install -g ./pi-web-ask.tgz
 # npm 11+ blocks install scripts by default; node-pty needs its own:
-#   npm install -g ./pi-web-ask-<sha>.tgz \
+#   npm install -g ./pi-web-ask.tgz \
 #     --allow-scripts=@agegr/pi-web,node-pty,@google/genai,protobufjs
 
 pi-web
@@ -138,7 +138,7 @@ these catch, and it is why they run in CI before a package is built.
 files. So an upgrade is the same command with a different tag:
 
 ```sh
-npm install -g https://github.com/SongOnRoc/pi-web/releases/download/ask-v0.18.0-1/pi-web-ask-<sha>.tgz
+npm install -g https://github.com/SongOnRoc/pi-web/releases/download/ask-v0.18.0-1/pi-web-ask.tgz
 ```
 
 `npm update` does not touch a globally installed tarball; reinstall to upgrade.
