@@ -9,10 +9,10 @@ import {
   type ResolvedPaths,
   type ResolvedResource,
 } from "@earendil-works/pi-coding-agent";
-import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { cwdAccessRefusal, getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import { getProjectTrustStatus } from "@/lib/project-trust";
-import { isPluginSourceCheckable } from "@/lib/plugin-updates";
+import { isPluginSourceCheckable, toPluginScope } from "@/lib/plugin-updates";
 import { invalidateModelRuntimeWithExtensions } from "@/lib/model-runtime";
 import type {
   PluginDiagnostic,
@@ -26,6 +26,7 @@ import type {
   PluginsResponse,
   PluginToggleResult,
 } from "@/lib/api-types";
+import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -33,10 +34,6 @@ type PluginAction = "install" | "remove" | "update" | "disable" | "enable";
 
 function emptyCounts(): PluginResourceCounts {
   return { extensions: 0, skills: 0, prompts: 0, themes: 0 };
-}
-
-function toPluginScope(scope: string): PluginScope {
-  return scope === "project" ? "project" : "global";
 }
 
 function keyFor(source: string, scope: PluginScope): string {
@@ -190,7 +187,7 @@ function readPackageList(value: unknown): { source: string; scope: PluginScope }
   for (const item of value) {
     const source = typeof item?.source === "string" ? item.source.trim() : "";
     if (!source) return null;
-    const scope = readScope(item.scope);
+    const scope = toPluginScope(item.scope);
     packages.set(keyFor(source, scope), { source, scope });
   }
   return [...packages.values()];
@@ -354,7 +351,7 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
   } catch (error) {
     diagnostics.push({
       type: "error",
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage(error),
     });
   }
 
@@ -399,20 +396,13 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
   };
 }
 
-function readScope(scope: unknown): PluginScope {
-  return scope === "project" ? "project" : "global";
-}
-
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const cwd = searchParams.get("cwd");
-  if (!cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
+  const cwd = searchParams.get("cwd") ?? "";
 
   try {
-    const allowedRoots = await getAllowedFileRoots();
-    if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
-    }
+    const refused = await cwdAccessRefusal(cwd);
+    if (refused) return refused;
     return NextResponse.json(await readPlugins(cwd));
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
@@ -468,7 +458,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ...(await readPlugins(body.cwd)), results } satisfies PluginsBulkResponse);
     }
 
-    const scope = readScope(body.scope);
+    const scope = toPluginScope(body.scope);
     if (scope === "project" && !projectTrust.trusted) {
       return NextResponse.json(
         { error: "Project resources must be trusted before modifying project plugins" },
@@ -511,7 +501,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json(await readPlugins(body.cwd));
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    return NextResponse.json({ error: errorMessage(error) }, { status: 500 });
   } finally {
     // The provider lists share one extension-loaded runtime, and a package can
     // add or drop a provider; an update that failed halfway may have, too. An

@@ -6,7 +6,8 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { SkillToggleResult } from "@/lib/api-types";
 import { loadSkillsWithInstallInfo } from "@/lib/skills-service";
 import { setDisableModelInvocation } from "@/lib/skill-frontmatter";
-import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { cwdAccessRefusal, getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -15,14 +16,11 @@ export const dynamic = "force-dynamic";
 // skill paths, package skills, and .agents/skills directories are all included.
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const cwd = searchParams.get("cwd");
-  if (!cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
+  const cwd = searchParams.get("cwd") ?? "";
 
   try {
-    const allowedRoots = await getAllowedFileRoots();
-    if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
-    }
+    const refused = await cwdAccessRefusal(cwd);
+    if (refused) return refused;
     return NextResponse.json(await loadSkillsWithInstallInfo(cwd));
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
@@ -89,7 +87,7 @@ export async function PATCH(req: Request) {
           const refused = toggleSkillFile(target, disableModelInvocation, allowedRoots);
           results.push(refused ? { filePath: target, error: refused.error } : { filePath: target });
         } catch (e) {
-          results.push({ filePath: target, error: e instanceof Error ? e.message : String(e) });
+          results.push({ filePath: target, error: errorMessage(e) });
         }
       }
       return NextResponse.json({ results });

@@ -4,15 +4,18 @@ import { isHiddenRelation, SIDE_BOUNDARY_MESSAGE_TYPE } from "@/lib/session-fami
 import Image from "next/image";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, BlockingExtensionUiRequest, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolResultMessage, UserMessage } from "@/lib/types";
+import type { FileLinkTarget } from "@/lib/file-links";
 import { normalizeCustomPanelLines, stripAnsi } from "@/lib/ansi";
 import { splitNoticeLinks, splitNoticeText } from "@/lib/notice-text";
 import { EXTENSION_DIALOG_BASE_WIDTH, fitExtensionDialogWidth } from "@/lib/extension-dialog-fit";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
-import { collapsesProcessDetails, countToolCallBlocks, getDisplayableAssistantBlocks, getTurnAnchors, hasAssistantAnswer, hasTurnRef, isHiddenCustomMessage, splitFinalAssistantBlocks, liveOutputPreview, LIVE_OUTPUT_PREVIEW_LINES } from "@/lib/message-display";
+import { collapsesProcessDetails, countToolCallBlocks, getDisplayableAssistantBlocks, getTurnAnchors, hasAssistantAnswer, hasTurnRef, isHiddenCustomMessage, splitFinalAssistantBlocks, liveOutputPreview, LIVE_OUTPUT_PREVIEW_LINES, sumCost } from "@/lib/message-display";
 import { extractTurnWrittenFiles, type WrittenFile } from "@/lib/turn-written-files";
 import { getFinalAnswerViews, keepWrittenFiles, type FinalAnswerViews } from "@/lib/turn-views";
 import { formatTurnDuration, getTurnDurationMs } from "@/lib/turn-duration";
-import { dropMentionText, splitDroppedItems, uploadFiles, type DroppedItem } from "@/lib/file-upload-client";
+import { collectDroppedItems, dropMentionText, MAX_UPLOAD_TOTAL_BYTES, splitDroppedItems, summarizeNames, uploadFiles, uploadTotalBytes, type DroppedItem } from "@/lib/file-upload-client";
+import { formatImageBytes } from "@/lib/model-image-limits";
+import type { SessionReferenceTarget } from "@/lib/session-reference-target";
 import { MessageView } from "./MessageView";
 import { MarkdownBody } from "./MarkdownBody";
 import { AskQuestionPanel } from "./AskQuestionPanel";
@@ -50,6 +53,7 @@ import {
   restoreScrollTop,
   VISIBLE_PAGE_SIZE,
 } from "@/lib/chat-lazy-load";
+import { errorMessage } from "@/lib/errors";
 
 interface Props {
   session: SessionInfo | null;
@@ -88,7 +92,7 @@ interface Props {
   /** Opens Settings on a section: a bare `/mcp` that pi's built-in MCP extension owns opens Settings › MCP. */
   onOpenSettings?: (section: SettingsSection) => void;
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
-  onOpenFile?: (filePath: string, page?: number) => void;
+  onOpenFile?: (filePath: string, target?: FileLinkTarget) => void;
   /** Files dropped onto the chat were written into the working directory. */
   onFilesUploaded?: () => void;
   onOpenSubagent?: (sessionId: string, label: string) => void;
@@ -206,7 +210,7 @@ function getUserInputText(message: AgentMessage): string | null {
   return text.length > 0 ? text : null;
 }
 
-function ProcessDetailsGroup({ messageCount, toolCallCount, durationMs, cacheMisses, defaultExpanded = false, reveal = false, children, t }: { messageCount: number; toolCallCount: number; durationMs?: number; cacheMisses?: CacheMissSummary; defaultExpanded?: boolean; reveal?: boolean; children: ReactNode; t: (key: string, params?: Record<string, string | number>) => string }) {
+function ProcessDetailsGroup({ messageCount, toolCallCount, durationMs, cost, cacheMisses, defaultExpanded = false, reveal = false, children, t }: { messageCount: number; toolCallCount: number; durationMs?: number; cost?: number; cacheMisses?: CacheMissSummary; defaultExpanded?: boolean; reveal?: boolean; children: ReactNode; t: (key: string, params?: Record<string, string | number>) => string }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   useLayoutEffect(() => {
     if (reveal) setExpanded(true);
@@ -215,6 +219,8 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, durationMs, cacheMis
   const parts = [`${messageCount} ${t(messageCount === 1 ? "chat.message" : "chat.messages")}`];
   if (toolCallCount > 0) parts.push(`${toolCallCount} ${t(toolCallCount === 1 ? "chat.toolCall" : "chat.toolCalls")}`);
   if (durationMs !== undefined) parts.push(t("chat.turnDuration", { time: formatTurnDuration(durationMs) }));
+  // Folded, the cost of the steps inside is added up here (#1768); open, each shows under its step.
+  if (cost !== undefined && !(expanded || reveal)) parts.push(`$${cost.toFixed(4)}`);
   // Folded, the cache misses inside are added up here (#1265); open, each shows under its step.
   const cacheMissText = cacheMisses && !(expanded || reveal) ? cacheMissSummaryText(t, cacheMisses) : undefined;
 
@@ -314,7 +320,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     dismissCompactError,
     handleRecallQueue,
     handleBuiltinSlashCommand,
-    handleToolPresetChange, handleThinkingLevelChange, handleSetDefaultModel, handleSetDefaultThinkingLevel, loadSlashCommands, loadAllModels, scrollUserMsgToTop,
+    handleToolPresetChange, handleThinkingLevelChange, handleSetDefaultModel, handleSetDefaultThinkingLevel, loadSlashCommands, requestArgumentCompletions, loadAllModels, scrollUserMsgToTop,
     loadContext, activeLeafId, scrollToBottom, scrollToMessage,
   } = useAgentSession({
     session, sessionRunning, newSessionCwd, newSessionDraftKey, initialNewSessionChoices, onNewSessionChoicesChange, onAgentEnd: wrappedOnAgentEnd, onSessionEnded, onToolEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onSideSession,
@@ -361,7 +367,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     try {
       refusal = await startSideChat(message);
     } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
+      refusal = errorMessage(error);
     }
     if (!refusal) return;
     chatInputRef?.current?.restoreSubmission(message);
@@ -669,46 +675,67 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   }, [ctxKey, onContextUsageChange]);
   useEffect(() => () => { onContextUsageChange?.(null); }, [onContextUsageChange]);
 
-  // Images attach to the prompt. Other files go through the file explorer's
-  // upload into the working directory, never replacing a file already there,
-  // and come back as @mentions. The composer's attach button takes the same
-  // path, for phones that cannot drop files.
-  const uploadDroppedFiles = useCallback(async (files: File[]) => {
+  // Images attach to the prompt. Other files and folders go through the file
+  // explorer's upload into the working directory, never replacing a file
+  // already there, and come back as @mentions (a folder as `@folder/`). The
+  // composer's attach button takes the same path, for phones that cannot drop files.
+  const uploadDroppedItems = useCallback(async (dropped: DroppedItem[]) => {
     const cwd = session?.cwd ?? newSessionCwd;
     if (!cwd) {
       addNotice({ type: "warning", message: t("chat.dropNeedsCwd") });
       return;
     }
+    const names = (list: string[]) => summarizeNames(list, (count) => t("files.moreNames", { count }));
     try {
-      const { status, data } = await uploadFiles(cwd, files, "skip");
+      const { items, empty, failed } = await collectDroppedItems(dropped);
+      if (failed.length > 0) {
+        addNotice({ type: "error", message: t("chat.dropFailed", { message: names(failed.map((item) => `${item.name}: ${item.error}`)) }) });
+      }
+      if (empty.length > 0) addNotice({ type: "warning", message: t("files.folderEmpty", { names: empty.join(", ") }) });
+      if (items.length === 0) return;
+      const total = uploadTotalBytes(items);
+      if (total > MAX_UPLOAD_TOTAL_BYTES) {
+        addNotice({ type: "error", message: t("files.uploadTooLarge", { size: formatImageBytes(total), limit: formatImageBytes(MAX_UPLOAD_TOTAL_BYTES) }) });
+        return;
+      }
+      const { status, data } = await uploadFiles(cwd, items, "skip");
       if (status !== 200 && status !== 207) throw new Error(data.error ?? `HTTP ${status}`);
       const uploaded = data.uploaded ?? [];
       const skipped = data.skipped ?? [];
-      const mentions = dropMentionText(files, [...uploaded, ...skipped]);
+      const mentions = dropMentionText(items, [...uploaded, ...skipped]);
       if (mentions) chatInputRef?.current?.insertText(mentions);
       if (uploaded.length > 0) {
         addNotice({ type: "success", message: t("chat.dropUploaded", { count: uploaded.length }) });
         onFilesUploaded?.();
       }
       if (skipped.length > 0) {
-        addNotice({ type: "warning", message: t("chat.dropAlreadyExists", { names: skipped.join(", ") }) });
+        addNotice({ type: "warning", message: t("chat.dropAlreadyExists", { names: names(skipped) }) });
       }
-      for (const failure of data.errors ?? []) {
-        addNotice({ type: "error", message: t("chat.dropFailed", { message: `${failure.name}: ${failure.error}` }) });
+      const errors = data.errors ?? [];
+      if (errors.length > 0) {
+        addNotice({ type: "error", message: t("chat.dropFailed", { message: names(errors.map((failure) => `${failure.name}: ${failure.error}`)) }) });
       }
     } catch (uploadError) {
-      addNotice({ type: "error", message: t("chat.dropFailed", { message: uploadError instanceof Error ? uploadError.message : String(uploadError) }) });
+      addNotice({ type: "error", message: t("chat.dropFailed", { message: errorMessage(uploadError) }) });
     }
   }, [addNotice, chatInputRef, newSessionCwd, onFilesUploaded, session?.cwd, t]);
 
-  const onDrop = useCallback((items: DroppedItem[]) => {
-    const { images, files, folders } = splitDroppedItems(items);
-    if (images.length > 0) chatInputRef?.current?.addImages(images);
-    if (folders.length > 0) {
-      addNotice({ type: "warning", message: t("chat.dropFoldersUnsupported", { names: folders.join(", ") }) });
+  const onDrop = useCallback((items: DroppedItem[], session?: SessionReferenceTarget, mention?: string) => {
+    // A dragged session row quotes it: it joins the composer as a chip and its
+    // token is written when the message is sent (#1716).
+    if (session) {
+      chatInputRef?.current?.addSessionReference(session);
+      return;
     }
-    if (files.length > 0) void uploadDroppedFiles(files);
-  }, [addNotice, chatInputRef, t, uploadDroppedFiles]);
+    // A dragged explorer row: its @ mention, as the row's Mention button inserts it.
+    if (mention) {
+      chatInputRef?.current?.insertText(mention);
+      return;
+    }
+    const { images, uploads } = splitDroppedItems(items);
+    if (images.length > 0) chatInputRef?.current?.addImages(images);
+    if (uploads.length > 0) void uploadDroppedItems(uploads);
+  }, [chatInputRef, uploadDroppedItems]);
 
   const onAttachFiles = useCallback((files: File[]) => {
     onDrop(files.map((file) => ({ kind: "file", file })));
@@ -909,6 +936,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       slashCommands={slashCommands}
       slashCommandsLoading={slashCommandsLoading}
       onLoadSlashCommands={loadSlashCommands}
+      onGetArgumentCompletions={requestArgumentCompletions}
       extensionUiOpen={Boolean(extensionDialog || extensionCustomUi)}
       onBuiltinCommand={handleBuiltinSlashCommand}
       soundEnabled={soundEnabled}
@@ -995,24 +1023,27 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
         </div>
       )}
 
-      <div
-        style={{
-          position: "absolute",
-          top: 12,
-          left: 0,
-          right: isMobile ? 0 : CHAT_MINIMAP_WIDTH,
-          zIndex: 40,
-          display: "flex",
-          // Toasts live in the top-right corner
-          justifyContent: "flex-end",
-          padding: `0 ${CHAT_COLUMN_PADDING}px`,
-          pointerEvents: "none",
-        }}
-      >
-        <NoticeShelf notices={notices} floating onPauseChange={setNoticePaused} />
-      </div>
-
       <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        {/* Inside the transcript's box, not the whole column: the shelf ends
+            above the composer and scrolls there instead of covering it (#1780). */}
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            bottom: 12,
+            left: 0,
+            right: isMobile ? 0 : CHAT_MINIMAP_WIDTH,
+            zIndex: 40,
+            display: "flex",
+            // Toasts live in the top-right corner
+            justifyContent: "flex-end",
+            alignItems: "flex-start",
+            padding: `0 ${CHAT_COLUMN_PADDING}px`,
+            pointerEvents: "none",
+          }}
+        >
+          <NoticeShelf notices={notices} floating onPauseChange={setNoticePaused} />
+        </div>
         {extensionDialog && (
           <ExtensionDialog key={extensionDialog.id} request={extensionDialog} waitingCount={waitingExtensionDialogCount} onRespond={respondToExtensionUi} />
         )}
@@ -1061,7 +1092,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                 const msg = options.messageOverride ?? messages[idx];
                 if (msg.role === "custom" && msg.customType === SIDE_BOUNDARY_MESSAGE_TYPE) return <SideChatDivider key="side-chat-divider" />;
                 if (isHiddenCustomMessage(msg)) return null;
-                // pi's showCacheMissNotices (#1265): read from the stored message, not a turn view's copy.
+                // pi's notices.* (#1265): read from the stored message, not a turn view's copy.
                 const notices = options.withNotices === false ? [] : getTranscriptNotices(messages[idx]);
                 const isVisible = hasTurnRef(msg, turnAnchors[idx]);
                 const currentRefIdx = visibleRefIndexByMessage.get(idx);
@@ -1213,7 +1244,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                 if (processMessageCount === 0) rendered.push(...processViews);
                 else if (processViews.length > 0) {
                   const answered = collapsesProcessDetails(finalAnswerMessage);
-                  const processCacheMisses = summarizeCacheMisses(messages.slice(userIdx + 1, finalAnswerMessage ? finalAssistantIdx : finalAssistantIdx + 1));
+                  // The steps inside the fold: the final message's own notices and usage go under its answer.
+                  const foldedMessages = messages.slice(userIdx + 1, finalAnswerMessage ? finalAssistantIdx : finalAssistantIdx + 1);
                   rendered.push(
                     <div
                       key={`process-group-${messageKeys[groupStartIdx]}`}
@@ -1224,7 +1256,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                           would otherwise stay open once its answer shows up, e.g. when
                           switching between an answered and an unanswered leaf of the same
                           turn. Manual toggles survive every other re-render. */}
-                      <ProcessDetailsGroup key={answered ? "answered" : "unanswered"} messageCount={processMessageCount} toolCallCount={processToolCount} durationMs={turnDurationMs} cacheMisses={processCacheMisses} defaultExpanded={!answered} reveal={revealProcess} t={t}>
+                      <ProcessDetailsGroup key={answered ? "answered" : "unanswered"} messageCount={processMessageCount} toolCallCount={processToolCount} durationMs={turnDurationMs} cost={sumCost(foldedMessages)} cacheMisses={summarizeCacheMisses(foldedMessages)} defaultExpanded={!answered} reveal={revealProcess} t={t}>
                         {processViews}
                       </ProcessDetailsGroup>
                     </div>,
@@ -1266,7 +1298,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                        {t("chat.loadEarlier")}
                     </div>
                   )}
-                  <div ref={attachTranscriptRows}>{rendered.slice(startIndex)}</div>
+                  <div ref={attachTranscriptRows} className="transcript-rows">{rendered.slice(startIndex)}</div>
                 </>
               );
             })()}
@@ -1425,7 +1457,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
 function SideChatDivider() {
   const { t } = useI18n();
   return (
-    <div role="separator" className="my-4 flex items-center gap-3 text-xs" style={{ color: "var(--text-dim)" }}>
+    // Bottom margin only: the row above keeps its own gap (useSkipOffscreenRows).
+    <div role="separator" className="mb-4 flex items-center gap-3 text-xs" style={{ color: "var(--text-dim)" }}>
       <span className="h-px flex-1" style={{ background: "var(--border)" }} />
       <span>{t("sideChat.divider")}</span>
       <span className="h-px flex-1" style={{ background: "var(--border)" }} />
@@ -1440,7 +1473,7 @@ const StreamingReply = memo(function StreamingReply({ store, onCommit, toolResul
   toolResults: Map<string, ToolResultMessage>;
   modelNames: Record<string, string>;
   cwd?: string;
-  onOpenFile?: (filePath: string, page?: number) => void;
+  onOpenFile?: (filePath: string, target?: FileLinkTarget) => void;
   onOpenSubagent?: (sessionId: string, label: string) => void;
 }) {
   const message = useStreamingSelector(store, selectStreamingMessage);
@@ -1472,6 +1505,19 @@ function NoticeShelf({ notices, floating = false, onPauseChange }: { notices: No
         // Right-anchored: every toast's right edge aligns here, widths extend leftward
         alignItems: "flex-end",
         marginBottom: floating ? 0 : 10,
+        // Never taller than the box it floats in, the transcript's above the
+        // composer: a stack that does not fit scrolls there (#1780). The scroll
+        // box clips, so its padding keeps the cards' shadows inside it.
+        ...(floating ? {
+          maxHeight: "100%",
+          overflowY: "auto",
+          overscrollBehavior: "contain",
+          scrollbarWidth: "thin",
+          padding: "4px 12px 24px",
+          marginTop: -4,
+          marginLeft: -12,
+          marginRight: -12,
+        } as const : {}),
       }}
     >
       {notices.map((notice, index) => {
@@ -1508,6 +1554,8 @@ function NoticeShelf({ notices, floating = false, onPauseChange }: { notices: No
               // so the toast itself must opt back into interactivity or hover events never reach it
               pointerEvents: "auto",
               marginBottom: index === notices.length - 1 ? 0 : 6,
+              // Each card keeps its height; the shelf scrolls instead of squeezing them
+              flexShrink: 0,
               overflow: "hidden",
               borderRadius: 14,
               border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",

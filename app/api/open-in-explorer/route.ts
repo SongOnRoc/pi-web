@@ -3,6 +3,7 @@ import { resolve } from "path";
 import { NextResponse } from "next/server";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { fileManagerPlatform, isFileManagerSupported, isLoopbackHost, launchFileManager } from "@/lib/open-in-file-manager";
+import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -21,7 +22,10 @@ export async function GET(request: Request) {
   return NextResponse.json({ supported, reason, platform: fileManagerPlatform() });
 }
 
-/** Opens the session workspace in the OS file manager. */
+/**
+ * `{ cwd }` opens the session workspace in the OS file manager; `{ reveal }`
+ * shows a file or folder selected in its folder (a file row's menu).
+ */
 export async function POST(request: Request) {
   try {
     const { supported, reason } = availabilityFor(request);
@@ -29,24 +33,27 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: reason }, { status: 403 });
     }
 
-    const body = await request.json() as { cwd?: unknown };
-    if (typeof body.cwd !== "string" || !body.cwd.trim()) {
+    const body = await request.json() as { cwd?: unknown; reveal?: unknown };
+    const reveal = typeof body.reveal === "string" && body.reveal.trim() !== "";
+    const requested = reveal ? body.reveal : body.cwd;
+    if (typeof requested !== "string" || !requested.trim()) {
       return NextResponse.json({ error: "cwd-required" }, { status: 400 });
     }
-    const target = resolve(body.cwd);
+    const target = resolve(requested);
     // Authorize before touching the path, so a location outside the allowed
     // roots answers 403 whether or not it exists.
     const roots = await getAllowedFileRoots();
     if (!isExistingFilePathAllowed(target, roots)) {
       return NextResponse.json({ error: "access-denied" }, { status: 403 });
     }
-    if (!(await stat(target)).isDirectory()) {
+    const isDirectory = (await stat(target)).isDirectory();
+    if (!reveal && !isDirectory) {
       return NextResponse.json({ error: "not-a-directory" }, { status: 400 });
     }
 
-    await launchFileManager(target);
+    await launchFileManager(target, process.platform, process.env, reveal);
     return NextResponse.json({ opened: true });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    return NextResponse.json({ error: errorMessage(error) }, { status: 500 });
   }
 }

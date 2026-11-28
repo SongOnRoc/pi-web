@@ -1,3 +1,4 @@
+import type { FileLineRange } from "@/lib/file-links";
 import type { FileViewerState } from "@/lib/file-viewer-state";
 import type { Tab } from "./TabBar";
 
@@ -35,8 +36,20 @@ interface OpenFileTabInput {
   filePath: string;
   modeHint?: "diff";
   page?: number;
+  lines?: FileLineRange;
   sourceSessionId?: string | null;
   tabId: string;
+}
+
+// A link to lines shows them in the source, whatever mode the tab was in.
+function lineLinkViewerState(previous?: FileViewerState): FileViewerState {
+  return {
+    displayMode: "source",
+    // An explicit wrap choice carries over; an unmade one stays unmade.
+    wrapLines: previous?.wrapLines,
+    scrollTop: 0,
+    scrollLeft: 0,
+  };
 }
 
 export function openFileTab(tabs: Tab[], input: OpenFileTabInput): Tab[] {
@@ -49,7 +62,8 @@ export function openFileTab(tabs: Tab[], input: OpenFileTabInput): Tab[] {
       sourceSessionId: input.sourceSessionId,
       initialDisplayMode: input.modeHint,
       page: input.page,
-      viewerState: input.modeHint ? {
+      lines: input.lines,
+      viewerState: input.lines ? lineLinkViewerState() : input.modeHint ? {
         displayMode: input.modeHint,
         scrollTop: 0,
         scrollLeft: 0,
@@ -63,7 +77,8 @@ export function openFileTab(tabs: Tab[], input: OpenFileTabInput): Tab[] {
   );
   const sourceUnchanged = !sourceChanged;
   const pageChanged = existing.page !== input.page;
-  if (sourceUnchanged && !input.modeHint && !pageChanged) return tabs;
+  // Every click on a line link goes to its lines again, even the same ones.
+  if (sourceUnchanged && !input.modeHint && !pageChanged && !input.lines) return tabs;
 
   return tabs.map((tab) => {
     if (tab.id !== input.tabId) return tab;
@@ -87,6 +102,11 @@ export function openFileTab(tabs: Tab[], input: OpenFileTabInput): Tab[] {
         scrollTop: 0,
         scrollLeft: 0,
       };
+      bumpRevision = true;
+    }
+    if (input.lines) {
+      next.lines = input.lines;
+      next.viewerState = lineLinkViewerState(tab.viewerState);
       bumpRevision = true;
     }
     if (bumpRevision) next.viewerRevision = (tab.viewerRevision ?? 0) + 1;
@@ -118,6 +138,47 @@ export function saveFileViewerState(
   if (index === -1 || (tabs[index].viewerRevision ?? 0) !== viewerRevision) return tabs;
 
   const next = [...tabs];
-  next[index] = { ...next[index], viewerState };
+  // The viewer went to the link's lines on mount; from here on its own scroll
+  // is the place to come back to.
+  const tab: Tab = { ...next[index], viewerState };
+  delete tab.lines;
+  next[index] = tab;
   return next;
+}
+
+/** Where `filePath` is after `from` moved to `to`: the entry itself, or anything below a moved folder. */
+export function movedFilePath(filePath: string, from: string, to: string): string | null {
+  if (filePath === from) return to;
+  for (const separator of ["/", "\\"]) {
+    const prefix = from.endsWith(separator) ? from : from + separator;
+    if (filePath.startsWith(prefix)) return to + filePath.slice(from.length);
+  }
+  return null;
+}
+
+/** The explorer moved or renamed `from`: its open tabs follow, keeping their viewer state. */
+export function retargetFileTabs(tabs: Tab[], from: string, to: string): Tab[] {
+  let changed = false;
+  const next = tabs.map((tab) => {
+    if (tab.kind) return tab;
+    const filePath = movedFilePath(tab.filePath, from, to);
+    if (filePath === null) return tab;
+    changed = true;
+    const label = filePath.split(/[\\/]/).at(-1) || tab.label;
+    return { ...tab, id: `file:${filePath}`, filePath, label };
+  });
+  return changed ? next : tabs;
+}
+
+/** The explorer deleted `deleted`: tabs of it, or of anything below it, close. */
+export function dropDeletedFileTabs(tabs: Tab[], deleted: string): Tab[] {
+  const next = tabs.filter((tab) => tab.kind || movedFilePath(tab.filePath, deleted, deleted) === null);
+  return next.length === tabs.length ? tabs : next;
+}
+
+/** A tab id after `from` moved to `to`, or the id unchanged. */
+export function retargetFileTabId(tabId: string, from: string, to: string): string {
+  if (!tabId.startsWith("file:")) return tabId;
+  const filePath = movedFilePath(tabId.slice("file:".length), from, to);
+  return filePath === null ? tabId : `file:${filePath}`;
 }

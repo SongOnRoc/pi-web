@@ -170,6 +170,15 @@ export function FolderIcon(props: SidebarIconProps) {
   return <SidebarIcon {...props}><path d="M3 8a2 2 0 0 1 2-2h3.4l1.9 1.9H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></SidebarIcon>;
 }
 
+export function FileIcon(props: SidebarIconProps) {
+  return (
+    <SidebarIcon {...props}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 3v5h5" />
+    </SidebarIcon>
+  );
+}
+
 export function FolderPlusIcon(props: SidebarIconProps) {
   return (
     <SidebarIcon {...props}>
@@ -179,11 +188,30 @@ export function FolderPlusIcon(props: SidebarIconProps) {
   );
 }
 
+/** The folder with an arrow out of it: in the OS file manager, outside Pi Web. */
+export function FolderOpenIcon(props: SidebarIconProps) {
+  return (
+    <SidebarIcon {...props}>
+      <path d="M21 12.5V9.9a2 2 0 0 0-2-2h-8.7L8.4 6H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h7" />
+      <path d="M16 19h5m0 0v-5m0 5-6-6" />
+    </SidebarIcon>
+  );
+}
+
 export function TerminalIcon(props: SidebarIconProps) {
   return (
     <SidebarIcon {...props}>
       <polyline points="4 17 10 11 4 5" />
       <line x1="12" y1="19" x2="20" y2="19" />
+    </SidebarIcon>
+  );
+}
+
+export function ClockIcon(props: SidebarIconProps) {
+  return (
+    <SidebarIcon {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
     </SidebarIcon>
   );
 }
@@ -203,6 +231,16 @@ export function UploadIcon(props: SidebarIconProps) {
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
       <path d="m17 8-5-5-5 5" />
       <path d="M12 3v12" />
+    </SidebarIcon>
+  );
+}
+
+export function DownloadIcon(props: SidebarIconProps) {
+  return (
+    <SidebarIcon {...props}>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M12 15V3" />
     </SidebarIcon>
   );
 }
@@ -238,6 +276,16 @@ export function EyeIcon(props: SidebarIconProps) {
 
 export function MessageIcon(props: SidebarIconProps) {
   return <SidebarIcon {...props}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></SidebarIcon>;
+}
+
+/** "@ mention in chat": the files tab's and the file viewer's insert-a-reference button. */
+export function MentionIcon({ size = 11, ...props }: SidebarIconProps) {
+  return (
+    <SidebarIcon {...props} size={size} strokeWidth={2.2}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" />
+    </SidebarIcon>
+  );
 }
 
 /**
