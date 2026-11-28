@@ -935,6 +935,31 @@ export interface PluginsResponse {
   totals: PluginResourceCounts;
   diagnostics: PluginDiagnostic[];
   projectResourcesLoaded: boolean;
+  /** Pi Web's own built-in extensions, which the settings file switches on and off. */
+  builtins: BuiltinExtensionInfo[];
+}
+
+/**
+ * One built-in extension of Pi Web, as Settings ‹ Plugins lists it.
+ *
+ * The names match `BUILTIN_EXTENSION_NAMES` in `lib/builtin-extensions.ts`; they
+ * are spelled out here because this file is imported by the browser and that
+ * one pulls in pi's SDK and `node:path`.
+ */
+export type BuiltinExtensionName = "codemode" | "tool-search" | "mcp" | "ask-question";
+
+/**
+ * One built-in extension of Pi Web, as Settings ‹ Plugins lists it.
+ *
+ * `enabled` is what a session in the open folder gets: a trusted project's
+ * settings can override the global switch, exactly as for a package. The label
+ * and description the panel shows come from the client's own translations.
+ */
+export interface BuiltinExtensionInfo {
+  name: BuiltinExtensionName;
+  enabled: boolean;
+  /** What the global settings alone make of it, when a project overrides it. */
+  global?: { enabled: boolean };
 }
 
 /** One package of a bulk enable/disable; `error` means it was left as it was. */

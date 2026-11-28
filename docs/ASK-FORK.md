@@ -42,6 +42,23 @@ The `.tgz` carries a built `.next` (685 files, about 22 MB). Without it
 `bin/pi-web.js` exits with "Build artifacts not found", which is why the workflow
 runs `npm run build` before `npm pack`.
 
+## Turning the ask tool off
+
+`ask_user_question` is one of Pi Web's built-in extensions, so **Settings ›
+Plugins** lists it under *Built-in tools* beside the packages and switches it
+with `-builtin:ask-question` in the `extensions` list of
+`settings.json` (global) or `.pi/settings.json` (a trusted project, which
+overrides the global switch there).
+
+Off means the extension's factory never runs, so the tool is never registered
+and the model does not see it: it cannot call it, and the system prompt carries
+no instructions for it. That is a different thing from a tool that is listed and
+refuses every call. Sessions already running keep the tool list they started
+with; a new session in that folder picks the switch up.
+
+The same switch works by hand in the settings file: add `"-builtin:ask-question"`
+to its `extensions` list.
+
 ## Cutting a version worth keeping
 
 ```sh

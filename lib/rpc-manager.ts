@@ -68,7 +68,7 @@ import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import { resolveShellTools } from "./powershell-settings";
 import { CHAT_ONLY_RESOURCE_LOADER_OPTIONS, contextFilesSystemPrompt } from "./chat-only";
 import { createExactSystemPromptExtension } from "./exact-system-prompt";
-import { createPiWebBuiltinExtensions, createSubagentCodemodeExtension, createSubagentMcpExtensions } from "./builtin-extensions";
+import { createPiWebBuiltinExtensions, createSubagentCodemodeExtension, createSubagentMcpExtensions, gatedBuiltin } from "./builtin-extensions";
 import type { McpHost } from "./mcp-host";
 import type { DebugMcpHost, DebugSessionLifecycle, DebugWrapperSnapshot } from "./debug-types";
 import { mcpPromptPreparation, type McpCommandCandidate } from "./mcp-command";
@@ -3857,7 +3857,15 @@ export async function startRpcSession(
                 () => listSubagentProfiles(sessionCwd),
                 isBuiltInSubagentsEnabled,
               ),
-              createAskQuestionExtension(),
+              // Settings › Plugins can turn this off, globally or for a trusted
+              // project; with it off the tool never reaches the model's list.
+              builtins
+                ? gatedBuiltin("ask-question", createAskQuestionExtension(), {
+                    agentDir,
+                    cwd: sessionCwd,
+                    projectTrusted: () => settingsManager.isProjectTrusted(),
+                  })
+                : createAskQuestionExtension(),
             ],
             extensionsOverride: (base) => preferUserPowerShellExtension(
               preferUserBashExtension(preferPiWebSubagentExtension(base)),

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { existsSync, readFileSync, statSync } from "fs";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 import {
+  CONFIG_DIR_NAME,
   DefaultPackageManager,
   getAgentDir,
   SettingsManager,
@@ -9,12 +10,20 @@ import {
   type ResolvedPaths,
   type ResolvedResource,
 } from "@earendil-works/pi-coding-agent";
+import { updateGlobalSettings, updateProjectSettings } from "@/lib/global-settings-file";
 import { cwdAccessRefusal, getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import { getProjectTrustStatus } from "@/lib/project-trust";
 import { isPluginSourceCheckable, toPluginScope } from "@/lib/plugin-updates";
 import { invalidateModelRuntimeWithExtensions } from "@/lib/model-runtime";
+import {
+  BUILTIN_EXTENSION_NAMES,
+  readBuiltinExtensionSwitches,
+  type BuiltinExtensionSwitch,
+} from "@/lib/builtin-extensions";
 import type {
+  BuiltinExtensionInfo,
+  BuiltinExtensionName,
   PluginDiagnostic,
   PluginPackageInfo,
   PluginResourceCounts,
@@ -30,7 +39,7 @@ import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 
-type PluginAction = "install" | "remove" | "update" | "disable" | "enable";
+type PluginAction = "install" | "remove" | "update" | "disable" | "enable" | "set-builtin";
 
 function emptyCounts(): PluginResourceCounts {
   return { extensions: 0, skills: 0, prompts: 0, themes: 0 };
@@ -393,7 +402,71 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
     totals,
     diagnostics,
     projectResourcesLoaded: projectTrust.trusted,
+    builtins: await readBuiltinExtensionList(cwd, agentDir, projectTrust.trusted),
   };
+}
+
+/**
+ * Pi Web's own built-ins with the switch that currently decides each one.
+ *
+ * A project's settings may override the global switch, so `enabled` is what a
+ * session in this folder would get, and `global` is filled in when the two
+ * differ; `lib/builtin-extensions.ts` resolves both from the `extensions` lists
+ * with the SDK's own pattern rules.
+ */
+async function readBuiltinExtensionList(
+  cwd: string,
+  agentDir: string,
+  projectTrusted: boolean,
+): Promise<BuiltinExtensionInfo[]> {
+  let switches: Record<BuiltinExtensionName, BuiltinExtensionSwitch>;
+  try {
+    switches = await readBuiltinExtensionSwitches({ agentDir, cwd, projectTrusted });
+  } catch {
+    // The panel still lists packages; an unreadable settings file leaves the
+    // built-in switches out rather than failing the whole page.
+    return [];
+  }
+  return BUILTIN_EXTENSION_NAMES.map((name) => {
+    const swapped = switches[name];
+    return {
+      name,
+      enabled: swapped.enabled,
+      ...(swapped.global ? { global: { enabled: swapped.global.enabled } } : {}),
+    } satisfies BuiltinExtensionInfo;
+  });
+}
+
+/**
+ * Turns one of Pi Web's built-ins on or off by editing the settings file's
+ * `extensions` list: `-builtin:<name>` turns it off, and dropping that entry
+ * (and a `+builtin:<name>` this route added) turns it back on.
+ *
+ * `extensions` has no setter on pi's `SettingsManager`, so the file is written
+ * through `updateGlobalSettings` / `updateProjectSettings`, which take the same
+ * lock SettingsManager does and leave every other pattern — including a `!` or a
+ * glob that also matches — exactly as authored.
+ */
+async function setBuiltinExtensionEnabled(options: {
+  name: BuiltinExtensionName;
+  enabled: boolean;
+  scope: PluginScope;
+  globalSettingsPath: string;
+  projectSettingsPath: string;
+}): Promise<void> {
+  const offPattern = `-builtin:${options.name}`;
+  const onPattern = `+builtin:${options.name}`;
+  const update = (settings: Record<string, unknown>) => {
+    const current = Array.isArray(settings.extensions)
+      ? settings.extensions.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const withoutOurs = current.filter((entry) => entry !== offPattern && entry !== onPattern);
+    const next = options.enabled ? withoutOurs : [...withoutOurs, offPattern];
+    if (next.length === 0) delete settings.extensions;
+    else settings.extensions = next;
+  };
+  if (options.scope === "project") await updateProjectSettings(options.projectSettingsPath, update);
+  else await updateGlobalSettings(options.globalSettingsPath, update);
 }
 
 export async function GET(req: Request) {
@@ -427,6 +500,10 @@ export async function POST(req: Request) {
       scope?: PluginScope;
       packages?: unknown;
       cwd?: string;
+      /** `set-builtin`: which of Pi Web's own- built-ins to switch. */
+      builtin?: BuiltinExtensionName;
+      /** `set-builtin`: what a session in this folder should get. */
+      enabled?: boolean;
     };
     if (!body.cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
     if (!body.action) return NextResponse.json({ error: "action required" }, { status: 400 });
@@ -495,6 +572,23 @@ export async function POST(req: Request) {
       if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
       setPackagesDisabled(settingsManager, [source], scope, false);
       await settingsManager.flush();
+    } else if (body.action === "set-builtin") {
+      // Settings › Plugins' own built-ins: `builtin` names one, `enabled` says
+      // what a session in this folder should get.
+      if (!body.builtin) return NextResponse.json({ error: "builtin required" }, { status: 400 });
+      if (!BUILTIN_EXTENSION_NAMES.includes(body.builtin)) {
+        return NextResponse.json({ error: `Unknown built-in: ${body.builtin}` }, { status: 400 });
+      }
+      if (typeof body.enabled !== "boolean") {
+        return NextResponse.json({ error: "enabled must be a boolean" }, { status: 400 });
+      }
+      await setBuiltinExtensionEnabled({
+        name: body.builtin,
+        enabled: body.enabled,
+        scope,
+        globalSettingsPath: join(agentDir, "settings.json"),
+        projectSettingsPath: join(body.cwd, CONFIG_DIR_NAME, "settings.json"),
+      });
     } else {
       return NextResponse.json({ error: `Unsupported action: ${body.action}` }, { status: 400 });
     }

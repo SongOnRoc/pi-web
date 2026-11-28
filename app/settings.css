@@ -698,6 +698,25 @@
   text-align: center;
 }
 
+/* Settings › Plugins › Built-in tools: a row of the sidebar list holding a
+   switch, so a built-in sits beside the packages without being one. */
+.plugins-builtin-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 8px;
+}
+
+.plugins-builtin-scope {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.4;
+}
 .config-sidebar-message {
   padding: 10px 8px;
   color: var(--text-muted);

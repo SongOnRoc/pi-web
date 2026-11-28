@@ -1,4 +1,4 @@
-import { defineTool, type InlineExtension } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import {
@@ -15,6 +15,13 @@ import {
 } from "./ask-question";
 
 export const HOST_ASK_QUESTION_EXTENSION_NAME = "pi-web-ask-question";
+
+/** The named inline form: `hidden` and a factory, which `gatedBuiltin` wraps. */
+export interface AskQuestionInlineExtension {
+  name: string;
+  hidden: true;
+  factory: (pi: ExtensionAPI) => void | Promise<void>;
+}
 
 /**
  * The runtimes of the sessions this process holds, by session id.
@@ -75,8 +82,12 @@ const TOOL_DESCRIPTION = [
  * The model-facing tool. It is pi-web's own, not an extension's, so the card can
  * read the questions straight from the pending call instead of parsing a
  * rendered panel, and the answer travels as one structured value.
+ *
+ * The named form, not the bare factory: `hidden` keeps it out of the startup
+ * Extensions list, and Settings › Plugins controls it through its
+ * `builtin:ask-question` switch (`gatedBuiltin`).
  */
-export function createAskQuestionExtension(): InlineExtension {
+export function createAskQuestionExtension(): AskQuestionInlineExtension {
   return {
     name: HOST_ASK_QUESTION_EXTENSION_NAME,
     hidden: true,

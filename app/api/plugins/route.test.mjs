@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
+import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { createJiti } from "jiti";
 
 const root = await mkdtemp(join(tmpdir(), "pi-web-plugin-route-"));
@@ -203,4 +204,57 @@ test("enabling keeps an entry's own settings such as autoload", async () => {
   assert.equal(bulk.status, 200);
 
   assert.deepEqual(await readPackages(), [{ source: alpha, autoload: false }, { source: beta, autoload: false }]);
+});
+
+test("set-builtin writes the scope's extensions list and nothing else", async () => {
+  // The panel's switch: off appends `-builtin:<name>`, on drops it again, and
+  // every other pattern in the list — a glob, a `!`, another built-in — stays.
+  const settingsPath = join(agentDir, "settings.json");
+  await writeFile(settingsPath, JSON.stringify({ extensions: ["!builtin:mcp", "builtin:codemode"], theme: "dark" }));
+  // A project switch only counts once the folder is trusted, as for packages.
+  new ProjectTrustStore(agentDir).set(cwd, true);
+  const projectSettingsPath = join(cwd, ".pi", "settings.json");
+  await mkdir(join(cwd, ".pi"), { recursive: true });
+  await writeFile(projectSettingsPath, JSON.stringify({ extensions: [] }));
+
+  const off = await postPlugins({ action: "set-builtin", builtin: "ask-question", enabled: false, scope: "global" });
+  assert.equal(off.status, 200);
+  assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+    extensions: ["!builtin:mcp", "builtin:codemode", "-builtin:ask-question"],
+    theme: "dark",
+  });
+
+  const body = await off.json();
+  assert.deepEqual(
+    body.builtins.map((builtin) => [builtin.name, builtin.enabled]),
+    [["codemode", true], ["tool-search", true], ["mcp", false], ["ask-question", false]],
+  );
+
+  const on = await postPlugins({ action: "set-builtin", builtin: "ask-question", enabled: true, scope: "global" });
+  assert.equal(on.status, 200);
+  assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")).extensions, ["!builtin:mcp", "builtin:codemode"]);
+
+  // A project's own switch applies there and leaves the global list alone.
+  const project = await postPlugins({ action: "set-builtin", builtin: "ask-question", enabled: false, scope: "project" });
+  assert.equal(project.status, 200);
+  assert.deepEqual(JSON.parse(await readFile(projectSettingsPath, "utf8")).extensions, ["-builtin:ask-question"]);
+  assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")).extensions, ["!builtin:mcp", "builtin:codemode"]);
+  const projectAsk = (await project.json()).builtins.find((builtin) => builtin.name === "ask-question");
+  assert.equal(projectAsk.enabled, false);
+  assert.deepEqual(projectAsk.global, { enabled: true }, "the panel can show what the global switch alone says");
+
+  await rm(projectSettingsPath);
+});
+
+test("set-builtin refuses a name it does not know and an untrusted project", async () => {
+  const unknown = await postPlugins({ action: "set-builtin", builtin: "not-a-builtin", enabled: false, scope: "global" });
+  assert.equal(unknown.status, 400);
+  assert.match((await unknown.json()).error, /Unknown built-in/);
+
+  const untrusted = await POST(new Request("http://localhost/api/plugins", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "set-builtin", builtin: "ask-question", enabled: false, scope: "project", cwd }),
+  }));
+  assert.equal(untrusted.status, 403);
 });

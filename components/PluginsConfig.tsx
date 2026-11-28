@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { sendAgentCommand } from "@/lib/agent-client";
 import type {
+  BuiltinExtensionName,
   PluginPackageInfo,
   PluginStandaloneExtensionInfo,
   PluginUpdateResult,
@@ -593,9 +594,30 @@ export function PluginsConfig({
 
   const packages = useMemo(() => data?.packages ?? [], [data?.packages]);
   const standaloneExtensions = useMemo(() => data?.standaloneExtensions ?? [], [data?.standaloneExtensions]);
+  const builtins = useMemo(() => data?.builtins ?? [], [data?.builtins]);
   const selectedPackage = packages.find((pkg) => packageKey(pkg) === selected) ?? null;
   const selectedExtension = standaloneExtensions.find((extension) => extensionKey(extension) === selected) ?? null;
   const projectResourcesLoaded = data?.projectResourcesLoaded ?? true;
+
+  /** Turns one of Pi Web's own tools on or off for this folder. */
+  const toggleBuiltin = useCallback(async (name: BuiltinExtensionName, enabled: boolean, scope: PluginScope) => {
+    setBusyKey(`builtin:${name}`);
+    setActionError(null);
+    setActionMessage(null);
+    setGroupStatus(null);
+    try {
+      const res = await fetch("/api/plugins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set-builtin", builtin: name, enabled, scope, cwd }),
+      });
+      setData(await readJsonOrThrow<PluginsResponse>(res));
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyKey(null);
+    }
+  }, [cwd]);
 
   const groupedPackages = useMemo(() => {
     return (["project", "global"] as PluginScope[])
@@ -896,6 +918,35 @@ export function PluginsConfig({
                 </div>
               ) : (
                 <>
+                  {builtins.length > 0 && (
+                    <div className="config-sidebar-group">
+                      <ConfigSidebarGroupLabel>{t("plugins.builtins")}</ConfigSidebarGroupLabel>
+                      {builtins.map((builtin) => {
+                        const overridden = builtin.global !== undefined
+                          && builtin.global.enabled !== builtin.enabled;
+                        return (
+                          <div key={builtin.name} className="plugins-builtin-row">
+                            <ConfigStatusDot active={builtin.enabled} />
+                            <ConfigSidebarText className={`is-grow${builtin.enabled ? "" : " is-muted"}`}>
+                              {t(`plugins.builtin.${builtin.name}`)}
+                            </ConfigSidebarText>
+                            {overridden && (
+                              <span className="plugins-builtin-scope">{t("plugins.builtinProjectOverride")}</span>
+                            )}
+                            <ConfigSwitch
+                              size="small"
+                              checked={builtin.enabled}
+                              loading={busyKey === `builtin:${builtin.name}`}
+                              disabled={!projectResourcesLoaded && !builtin.enabled}
+                              label={t(`plugins.builtin.${builtin.name}`)}
+                              describedBy={`plugins-builtin-${builtin.name}-description`}
+                              onChange={(enabled) => void toggleBuiltin(builtin.name, enabled, "global")}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   {standaloneExtensions.length > 0 && (
                     <div className="config-sidebar-group">
                       <ConfigSidebarGroupLabel>{t("i18n.extensions")}</ConfigSidebarGroupLabel>

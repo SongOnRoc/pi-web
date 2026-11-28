@@ -68,6 +68,25 @@ export async function updateGlobalSettings<T>(
   settingsPath: string,
   update: (settings: Record<string, unknown>) => T,
 ): Promise<T> {
+  return updateSettingsFile(settingsPath, update);
+}
+
+/**
+ * The same locked read-modify-write for a project's `.pi/settings.json`, which
+ * pi's SettingsManager has no setter for either. The file is created when it is
+ * missing, as a project override has to start somewhere.
+ */
+export async function updateProjectSettings<T>(
+  settingsPath: string,
+  update: (settings: Record<string, unknown>) => T,
+): Promise<T> {
+  return updateSettingsFile(settingsPath, update);
+}
+
+async function updateSettingsFile<T>(
+  settingsPath: string,
+  update: (settings: Record<string, unknown>) => T,
+): Promise<T> {
   mkdirSync(dirname(settingsPath), { recursive: true });
   try {
     writeFileSync(settingsPath, "{}", { flag: "wx", mode: 0o600 });

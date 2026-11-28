@@ -270,7 +270,18 @@ export function createMcpExtensionConfigLoader(
 // Whether the settings switch a built-in off
 // ---------------------------------------------------------------------------
 
-export const BUILTIN_EXTENSION_NAMES = ["codemode", "tool-search", "mcp"] as const;
+/**
+ * A built-in extension whose availability the `extensions` settings list decides.
+ *
+ * `codemode`, `tool-search` and `mcp` are registered by `createMcpBuiltins`;
+ * `ask-question` is pi-web's own tool, registered beside them in `rpc-manager`,
+ * and it takes the same switch so Settings › Plugins can turn it off (and a
+ * trusted project can override that) the way it turns the others off.
+ *
+ * A tool the model cannot see is the point: the extension registers nothing when
+ * its switch is off, so `ask_user_question` never reaches the tool list.
+ */
+export const BUILTIN_EXTENSION_NAMES = ["codemode", "tool-search", "mcp", "ask-question"] as const;
 export type BuiltinExtensionName = typeof BUILTIN_EXTENSION_NAMES[number];
 
 export interface BuiltinExtensionSwitch {
@@ -376,6 +387,29 @@ export async function readBuiltinExtensionSwitches(options: {
 // ---------------------------------------------------------------------------
 // The list
 // ---------------------------------------------------------------------------
+
+/**
+ * A built-in that takes its switch on every load, so a `-builtin:<name>`
+ * setting turns it off without the extension list being rebuilt.
+ *
+ * `inlineExtension` is the named form (`{ name, factory }`), which carries the
+ * `hidden` flag and the model-only tool it registers.
+ */
+export function gatedBuiltin(
+  name: BuiltinExtensionName,
+  inlineExtension: { factory: ExtensionFactory },
+  options: { agentDir: string; cwd: string; projectTrusted: () => boolean },
+): InlineExtension {
+  return builtin(name, async (pi) => {
+    const switches = await readBuiltinExtensionSwitches({
+      agentDir: options.agentDir,
+      cwd: options.cwd,
+      projectTrusted: options.projectTrusted(),
+    });
+    if (!switches[name].enabled) return;
+    await inlineExtension.factory(pi);
+  });
+}
 
 /**
  * Registers nothing. A built-in that cannot run keeps its `builtin:<name>`
